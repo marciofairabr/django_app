@@ -19,20 +19,48 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik:/etc/traefik
+      - ./letsencrypt:/letsencrypt
     restart: always
 
   django:
     build: .
+    container_name: django_app
     restart: always
     env_file: .env
     depends_on:
       - postgres
       - redis
+
+    expose:
+      - "8000"
+
+    command: gunicorn django_app.wsgi:application --bind 0.0.0.0:8000 --workers 4
+
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.django.rule=Host(`app.local`)"
       - "traefik.http.routers.django.entrypoints=websecure"
       - "traefik.http.routers.django.tls.certresolver=le"
+      - "traefik.http.services.django.loadbalancer.server.port=8000"
+
+  celery:
+    build: .
+    container_name: celery_worker
+    restart: always
+    env_file: .env
+    command: celery -A django_app worker -l info
+    depends_on:
+      - redis
+      - postgres
+
+  celery-beat:
+    build: .
+    container_name: celery_beat
+    restart: always
+    env_file: .env
+    command: celery -A django_app beat -l info
+    depends_on:
+      - redis
 
   postgres:
     image: postgres:16
@@ -43,27 +71,14 @@ services:
       POSTGRES_PASSWORD: strongpassword
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
 
   redis:
     image: redis:7
     restart: always
-
-  celery:
-    build: .
-    command: celery -A django_app worker -l info
-    depends_on:
-      - redis
-      - django
-
-  fail2ban:
-    image: crazymax/fail2ban
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    volumes:
-      - /var/log:/var/log:ro
-    restart: always
+    ports:
+      - "6379:6379"
 
 volumes:
   pgdata:
